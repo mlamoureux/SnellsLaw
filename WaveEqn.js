@@ -1,34 +1,46 @@
 /**
- * Copyright 2018 - M. Lamoureux 
+ * Copyright 2018, 2020 - M. Lamoureux 
  *
  */
 function WaveEngine(gpgpUtility_, xResolution_, yResolution_, xLength_, yLength_, dt_)
 {
   "use strict";
 
-  var dt;
-  var dtHandle;
+  // we duplicate the input variables. Don't know if this is necessary.
+  var gpgpUtility = gpgpUtility_;
+  var xResolution = xResolution_; // number of grid points in the x direction
+  var yResolution = yResolution_; // number of grid points in the y direction
+  var xLength = xLength_;  // length of x side, in meters
+  var yLength = yLength_;  // length of y side, in meters
+  var dt = dt_; // time step size, in seconds
+
+  // spatial steps for the finite difference code
+  var dx    = xLength/xResolution;
+  var dy    = yLength/yResolution;
+
+  // pointers to the offsets in the Laplace stencil, including diagonal and anti-diagonals
+  var ndxHandle;
+  var ndyHandle;
+  var nddHandle;
+  var ndaHandle;
+  // weights for the Laplace stencil, note the diagonal and antidiagonal weights are equal. So only store one.
+  var wt0Handle;
+  var wtxHandle;
+  var wtyHandle;
+  var wtdHandle;
+  // Pointer to the wave function at t, and t - dt
+  var waveFunctionHandle; 
+  var oldWaveFunctionHandle;
+  // WebGLRenderingContext
+  var gl;
+  // a frame buffer object
   var fbos;
-  var gl;						/** WebGLRenderingContext */
-  var gpgpUtility;
-  var oldWaveFunctionHandle; 	/** The wave function at t - delta t */
-  var pixels;
+  var step = 0;  // count mode 3, to identify which textures are the time source, which is the destination
+  // stuff for gpgpUtilities
   var positionHandle;
-  var potential;
-  var potentialHandle;
   var program;
-   var step;  // count mode 3, to identify which textures are the time source, which is the destination
   var textureCoordHandle;
   var textures;
-  var waveFunctionHandle; /** The wave function at t */
-  var xLength;
-  var xLengthHandle;
-  var xResolution;
-  var xResolutionHandle;
-  var yLength;
-  var yLengthHandle;
-  var yResolution;
-  var yResolutionHandle;
 
   /**
    * Compile shaders and link them into a program, then retrieve references to the
@@ -50,53 +62,48 @@ function WaveEngine(gpgpUtility_, xResolution_, yResolution_, xLength_, yLength_
                          + "precision mediump float;\n"
                          + "#endif\n"
                          + ""
-                         // The delta-t for each timestep.
-                         + "uniform float dt;"
-                         // The physical length of the grid in nm.
-                         + "uniform float xLength;"
-                         + "uniform float yLength;"
-                         // At time t - delta t waveFunction.r is the real part waveFunction.g is the imaginary part.
-                         + "uniform sampler2D oldWaveFunction;"
-                         // The number of points along the x axis.
-                         + "uniform int xResolution;"
-                         // The number of points along the y axis.
-                         + "uniform int yResolution;"
-                         + ""
-                         // At time t waveFunction.r is the real part waveFunction.g is the imaginary part.
+                         // waveFunction.r is the amplitude waveFunction.g is the velocity^2. At time t.
                          + "uniform sampler2D waveFunction;"
-                         // Discrete representation of the potential function.
-                         + "uniform sampler2D potential;"
+                         // oldWaveFunction.r is the amplitude oldWaveFunction.g is the velocity^2. At time t-dt.
+                         + "uniform sampler2D oldWaveFunction;"
                          + ""
-                         // Vector to mix the real and imaginary parts in the wave function update.
-                         + "const vec2 mixing = vec2(-1.0, +1.0);"
+                         // The displacement in normalized x direction, y direction, diagonal and anti-diagonal.
+                         // These are 2-vectors.
+                         + "uniform vec2 ndx;"
+                         + "uniform vec2 ndy;"
+                         + "uniform vec2 ndd;"
+                         + "uniform vec2 nda;"
                          + ""
+                         // The weights needed in the Laplacian stencil wtx = (dt*dt)/(dx*dx).
+                         + "uniform float wt0;"
+                         + "uniform float wtx;"
+                         + "uniform float wty;"
+                         + "uniform float wtd;"
+                         + ""
+                         // A pointer into the Texture structure
                          + "varying vec2 vTextureCoord;"
                          + ""
                          + "void main()"
                          + "{"
-                         + "  float dx;"
-                         + "  float dy;"
-                         + "  float h;"
-                         + "  vec2  dss;"
-                         + "  vec2  dtt;"
-                         + "  vec4  value;"
-                         + ""
-                         + "  dx    = xLength/float(xResolution);"
-                         + "  dy    = yLength/float(yResolution);"
-                         + "  h     = dt*dt/(dx*dx);"
-                         + "  dss    = vec2(1.0/float(xResolution), 0.0);"
-                         + "  dtt    = vec2(0.0, 1.0/float(yResolution));"
-                         + "  value = texture2D(waveFunction, vTextureCoord);"
-                         + ""
-                         + "  gl_FragColor.r = 2.0*value.r"
-                         + "     - texture2D(oldWaveFunction,vTextureCoord).r"
-                         + "     + (value.g)*dt*dt*( texture2D(waveFunction, vTextureCoord+dss).r"
-                         + "     +     texture2D(waveFunction, vTextureCoord-dss).r" 
-                         + "     -   2.0*value.r)/(dx*dx)"
-                         + "     +  (value.g)*dt*dt*(texture2D(waveFunction, vTextureCoord+dtt).r"
-                         + "     +     texture2D(waveFunction, vTextureCoord-dtt).r" 
-                         + "     -   2.0*value.r )/(dy*dy);" 
-                         + "  gl_FragColor.g = value.g;"  // carry over the speed variable
+                         + "  gl_FragColor.g = texture2D(waveFunction, vTextureCoord).g;" // carry over the veolcity^2 variable
+                         + "  gl_FragColor.r = "  // and this is the time step on the wave amplitude
+                         + "     2.0*texture2D(waveFunction, vTextureCoord).r "
+                         + "     - texture2D(oldWaveFunction,vTextureCoord).r "
+                         + "     + (gl_FragColor.g)*(  "
+                         + "       wt0 * "
+                         + "       (texture2D(waveFunction, vTextureCoord).r)"
+                         + "       + "
+                         + "       wtx * "
+                         + "       (texture2D(waveFunction,vTextureCoord+ndx).r + texture2D(waveFunction,vTextureCoord-ndx).r)"
+                         + "       + "
+                         + "       wty * "
+                         + "       (texture2D(waveFunction,vTextureCoord+ndy).r + texture2D(waveFunction,vTextureCoord-ndy).r)"
+                         + "       + "
+                         + "       wtd * " // use the fact that wtd = wta usually, to save an operation here
+                         + "       (texture2D(waveFunction,vTextureCoord+ndd).r + texture2D(waveFunction,vTextureCoord-ndd).r "
+                         + "          + "
+                         + "        texture2D(waveFunction,vTextureCoord+nda).r + texture2D(waveFunction,vTextureCoord-nda).r)"
+                         + "      );" 
                          + "}";
 
     program               = gpgpUtility.createProgram(null, fragmentShaderSource);
@@ -104,14 +111,17 @@ function WaveEngine(gpgpUtility_, xResolution_, yResolution_, xLength_, yLength_
     gl.enableVertexAttribArray(positionHandle);
     textureCoordHandle    = gpgpUtility.getAttribLocation(program,  "textureCoord");
     gl.enableVertexAttribArray(textureCoordHandle);
-    dtHandle              = gl.getUniformLocation(program, "dt");
-    oldWaveFunctionHandle = gl.getUniformLocation(program, "oldWaveFunction");
-    potentialHandle       = gl.getUniformLocation(program, "potential");
+    //set up our pointers to variables in the shader code
     waveFunctionHandle    = gl.getUniformLocation(program, "waveFunction");
-    xResolutionHandle     = gl.getUniformLocation(program, "xResolution");
-    yResolutionHandle     = gl.getUniformLocation(program, "yResolution");
-    xLengthHandle         = gl.getUniformLocation(program, "xLength");
-    yLengthHandle         = gl.getUniformLocation(program, "yLength");
+    oldWaveFunctionHandle = gl.getUniformLocation(program, "oldWaveFunction");
+    ndxHandle              = gl.getUniformLocation(program, "ndx");
+    ndyHandle              = gl.getUniformLocation(program, "ndy");
+    nddHandle              = gl.getUniformLocation(program, "ndd");
+    ndaHandle              = gl.getUniformLocation(program, "nda");
+    wt0Handle              = gl.getUniformLocation(program, "wt0");
+    wtxHandle              = gl.getUniformLocation(program, "wtx");
+    wtyHandle              = gl.getUniformLocation(program, "wty");
+    wtdHandle              = gl.getUniformLocation(program, "wtd");
 
     return program;
   };
@@ -158,12 +168,20 @@ function WaveEngine(gpgpUtility_, xResolution_, yResolution_, xLength_, yLength_
     gl.vertexAttribPointer(positionHandle,     3, gl.FLOAT, gl.FALSE, 20, 0);
     gl.vertexAttribPointer(textureCoordHandle, 2, gl.FLOAT, gl.FALSE, 20, 12);
 
-    gl.uniform1f(dtHandle,          dt);
-    gl.uniform1i(xResolutionHandle, xResolution);
-    gl.uniform1i(yResolutionHandle, yResolution);
-    gl.uniform1f(xLengthHandle,     xLength);
-    gl.uniform1f(yLengthHandle,     yLength);
-
+    // Here we insert values from this JS code into the shader code above
+    gl.uniform2f(ndxHandle,          1.0/xResolution ,0.0); // this is a 2-vector
+    gl.uniform2f(ndyHandle,          0.0, 1.0/yResolution); // this is a 2-vector
+    gl.uniform2f(nddHandle,          1.0/xResolution, 1.0/yResolution); // this is a 2-vector
+    gl.uniform2f(ndaHandle,         -1.0/xResolution, 1.0/yResolution); // this is a 2-vector
+    // Here is from our work on grid algebras
+    var gamma = 1/3;  // circularly symmetric in dx=dy case. Not sure about other cases
+    var lambda = dx*dx/(dy*dy);
+    var eps = dt*dt/(dx*dx)
+    // we pre-compute the weights in the Laplacian stencil, to speed up the shaders (PDE solver)
+    gl.uniform1f(wt0Handle,          eps*(-2+2*gamma-2*lambda));
+    gl.uniform1f(wtxHandle,          eps*(1-gamma));
+    gl.uniform1f(wtyHandle,          eps*(lambda - gamma));
+    gl.uniform1f(wtdHandle,          eps*gamma/2);
    
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, textures[step]);
@@ -227,15 +245,13 @@ function WaveEngine(gpgpUtility_, xResolution_, yResolution_, xLength_, yLength_
     gl.deleteProgram(program);
   };
 
-  dt          = dt_;
-  gpgpUtility = gpgpUtility_;
   gl          = gpgpUtility.getGLContext();
   program     = this.createProgram(gl);
   fbos        = new Array(3);  // I think this needs to be 3, not 2
-  xLength      = xLength_;
-  yLength      = yLength_;
   textures    = new Array(3);  // I think this needs to be 3, not 2
-  step        = 0;
-  xResolution = xResolution_;
-  yResolution = yResolution_;
+//  step        = 0;
+//  dx    = xLength/xResolution;
+//  dy    = yLength/yResolution;
+//  hx = (dt*dt)/(dx*dx);
+//  hy = (dt*dt)/(dy*dy);
 };

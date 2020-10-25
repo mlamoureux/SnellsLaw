@@ -10,15 +10,17 @@ function WaveResults(gpgpUtility_, parent_, xResolution_, yResolution_)
 {
   "use strict";
 
-  var gpgpUtility;
-  var parent;
+  // don't know if I need this, copying the input variables
+  var gpgpUtility  = gpgpUtility_;
+  var parent       = parent_;
+  var xResolution  = xResolution_;
+  var yResolution  = yResolution_;
   var positionHandle;
   var program;
   var waveFunction;
   var waveFunctionHandle;
+  var maxVelHandle;
   var textureCoordHandle;
-  var xResolution;
-  var yResolution;
  
   /**
    * Compile shaders and link them into a program, then retrieve references to the
@@ -42,18 +44,24 @@ function WaveResults(gpgpUtility_, parent_, xResolution_, yResolution_)
                          + ""
                          // waveFunction.r is the real part waveFunction.g is the imaginary part.
                          + "uniform sampler2D waveFunction;"
-                         // The number of points along the y axis.
                          + ""
+                         // maximum velocity^2 to normalize to.
+                         + "uniform float maxVel;"
+                         + ""
+                         // pointer into the textuer
                          + "varying vec2 vTextureCoord;"
                          + ""
                          + "void main()"
                          + "{"
-                         + "  float  psi;"
+                         + "  float  amp;" // wave amplitude
+                         + "  float  vel;" // velocity value
                          + ""
-                         + "  psi     = texture2D(waveFunction, vTextureCoord).r;"
+                         + "  amp     = texture2D(waveFunction, vTextureCoord).r;"
+                         + "  vel     = texture2D(waveFunction, vTextureCoord).g;"
                          + ""
-                         + "  gl_FragColor = max(0., psi)*vec4(0.,0.,1.,1.)"
-                         + "               + max(0.,-psi)*vec4(1.,0.,0.,1.);"
+                         + "  gl_FragColor = max(0., amp)*vec4(0.,0.,1.,1.)"
+                         + "               + max(0.,-amp)*vec4(1.,0.,0.,1.)"
+                         + "               + min(1.,vel/maxVel)*vec4(0.,1.,0.,1.);"  // add a green tint for velocity
                          + "}";
 
     program            = gpgpUtility.createProgram(null, fragmentShaderSource);
@@ -61,8 +69,8 @@ function WaveResults(gpgpUtility_, parent_, xResolution_, yResolution_)
     gl.enableVertexAttribArray(positionHandle);
     textureCoordHandle = gpgpUtility.getAttribLocation(program,  "textureCoord");
     gl.enableVertexAttribArray(textureCoordHandle);
-//    potentialHandle    = gl.getUniformLocation(program, "potential");
     waveFunctionHandle = gl.getUniformLocation(program, "waveFunction");
+    maxVelHandle = gl.getUniformLocation(program, "maxVel");
     return program;
   };
 
@@ -85,12 +93,13 @@ function WaveResults(gpgpUtility_, parent_, xResolution_, yResolution_)
    * @param waveFunction {WebGLTexture} A xResolution by 1 texture containing the real
    *                                    and imaginary parts of the wave function.
    */
-  this.show = function(waveFunction)
+  this.show = function(waveFunction,maxV)
   {
     var blending;
     var gl;
 
     gl = gpgpUtility.getRenderingContext();
+    gl.uniform1f(maxVelHandle, maxV); // push this value before running the program for shaders
 
     gl.useProgram(program);
 
@@ -111,7 +120,7 @@ function WaveResults(gpgpUtility_, parent_, xResolution_, yResolution_)
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, waveFunction);
     gl.uniform1i(waveFunctionHandle, 0);
-
+// here
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
     if (!blending)
@@ -119,13 +128,8 @@ function WaveResults(gpgpUtility_, parent_, xResolution_, yResolution_)
       gl.disable(gl.BLEND);
     }
   }
-
-  gpgpUtility  = gpgpUtility_;
-  xResolution  = xResolution_;
-  yResolution  = yResolution_;
-  parent       = parent_;
- 
-  program      = this.createProgram(gpgpUtility.getGLContext());
+  // now run the damn thing  
+  program  = this.createProgram(gpgpUtility.getGLContext());
   this.setup(gpgpUtility);
 
 }
