@@ -57,11 +57,11 @@ function WaveResults(gpgpUtility_, parent_, xResolution_, yResolution_)
                          + "  float  vel;" // velocity value
                          + ""
                          + "  amp     = texture2D(waveFunction, vTextureCoord).r;"
-                         + "  vel     = texture2D(waveFunction, vTextureCoord).g;"
+                         + "  vel     = texture2D(waveFunction, vTextureCoord).g/maxVel;"
                          + ""
                          + "  gl_FragColor = max(0., amp)*vec4(0.,0.,1.,1.)"
                          + "               + max(0.,-amp)*vec4(1.,0.,0.,1.)"
-                         + "               + min(1.,vel/maxVel)*vec4(0.,1.,0.,1.);"  // add a green tint for velocity
+                         + "               + min(1.,vel)*vec4(0.,1.,0.,1.);"  // add a green tint for velocity
                          + "}";
 
     program            = gpgpUtility.createProgram(null, fragmentShaderSource);
@@ -99,8 +99,6 @@ function WaveResults(gpgpUtility_, parent_, xResolution_, yResolution_)
     var gl;
 
     gl = gpgpUtility.getRenderingContext();
-    gl.uniform1f(maxVelHandle, maxV); // push this value before running the program for shaders
-
     gl.useProgram(program);
 
     blending = gl.isEnabled(gl.BLEND);
@@ -116,11 +114,12 @@ function WaveResults(gpgpUtility_, parent_, xResolution_, yResolution_)
 
     gl.vertexAttribPointer(positionHandle,     3, gl.FLOAT, gl.FALSE, 20, 0);
     gl.vertexAttribPointer(textureCoordHandle, 2, gl.FLOAT, gl.FALSE, 20, 12);
+    
+    gl.uniform1f(maxVelHandle, maxV); // push this value before running the program for shaders
 
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, waveFunction);
     gl.uniform1i(waveFunctionHandle, 0);
-// here
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
     if (!blending)
