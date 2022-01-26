@@ -1,2 +1,4 @@
 RISE
 matplotlib
+numpy
+ipywidgets
